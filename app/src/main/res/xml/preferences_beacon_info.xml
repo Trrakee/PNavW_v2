@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    android:key="key_details">
+
+    <Preference
+        android:key="bd_type_info"
+        android:title="@string/pref_bd_type" />
+    <Preference
+        android:key="bd_uuid_info"
+        android:title="@string/pref_bd_uuid" />
+    <Preference
+        android:key="bd_bluetooth_name_info"
+        android:title="@string/pref_bd_bluetooth_name" />
+    <Preference
+        android:key="bd_txpower_info"
+        android:title="@string/pref_bd_txpower" />
+    <Preference
+        android:key="bd_rssi_info"
+        android:title="@string/pref_bd_rssi" />
+    <Preference
+        android:key="bd_distance_info"
+        android:title="@string/pref_bd_distance" />
+    <Preference
+        android:key="bd_major_info"
+        android:title="@string/pref_bd_major" />
+    <Preference
+        android:key="bd_minor_info"
+        android:title="@string/pref_bd_minor" />
+</PreferenceScreen>

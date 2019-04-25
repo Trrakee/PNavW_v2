@@ -1,0 +1,294 @@
+package trrakee.pnavw;
+
+import android.app.Application;
+import android.app.Notification;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.os.Parcelable;
+import android.os.RemoteException;
+import android.support.annotation.NonNull;
+import android.support.v4.content.LocalBroadcastManager;
+import android.util.Log;
+
+import org.altbeacon.beacon.Beacon;
+import org.altbeacon.beacon.BeaconManager;
+import org.altbeacon.beacon.BeaconParser;
+import org.altbeacon.beacon.RangeNotifier;
+import org.altbeacon.beacon.Region;
+import org.altbeacon.beacon.powersave.BackgroundPowerSaver;
+import org.altbeacon.beacon.startup.BootstrapNotifier;
+import org.altbeacon.beacon.startup.RegionBootstrap;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+import trrakee.pnavw.data.DataManager;
+import trrakee.pnavw.injection.component.ApplicationComponent;
+import trrakee.pnavw.injection.component.DaggerApplicationComponent;
+import trrakee.pnavw.injection.module.ApplicationModule;
+import trrakee.pnavw.model.ActionBeacon;
+import trrakee.pnavw.model.ActionRegion;
+import trrakee.pnavw.model.IManagedBeacon;
+import trrakee.pnavw.model.RegionName;
+import trrakee.pnavw.model.TrackedBeacon;
+import trrakee.pnavw.ui.activity.MainNavigationActivity;
+import trrakee.pnavw.util.BeaconUtil;
+import trrakee.pnavw.util.Constants;
+import trrakee.pnavw.util.PreferencesUtil;
+
+
+/**
+ * Created by Tushar Sharma on 03/26/2019.
+ */
+public class BeaconLocatorApp extends Application implements BootstrapNotifier, RangeNotifier {
+
+    ApplicationComponent applicationComponent;
+    List<Region> mRegions = new ArrayList<>();
+    List<TrackedBeacon> mBeacons = new ArrayList<>();
+    private BeaconManager mBeaconManager;
+    private DataManager mDataManager;
+    private RegionBootstrap mRegionBootstrap;
+    private LocalBroadcastManager mBroadcaster;
+
+    public static BeaconLocatorApp from(@NonNull Context context) {
+        return (BeaconLocatorApp) context.getApplicationContext();
+    }
+
+    public ApplicationComponent getComponent() {
+        return applicationComponent;
+    }
+
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+
+        applicationComponent = DaggerApplicationComponent.builder()
+                .applicationModule(new ApplicationModule(this))
+                .build();
+
+        mBeaconManager = BeaconLocatorApp.from(this).getComponent().beaconManager();
+        mDataManager = BeaconLocatorApp.from(this).getComponent().dataManager();
+
+        mBroadcaster = LocalBroadcastManager.getInstance(this);
+
+        initBeaconManager();
+
+        // the ability to continually scan for long periods of time in the background on Andorid 8+
+        // in exchange for showing an icon at the top of the screen and a always-on notification to
+        // communicate to users that your app is using resources in the background.
+
+        if (PreferencesUtil.isForegroundScan(this)) {
+            Notification.Builder builder = new Notification.Builder(this);
+            builder.setSmallIcon(R.mipmap.ic_launcher);
+            builder.setContentTitle(getText(R.string.text_scanning));
+            Intent intent = new Intent(this, MainNavigationActivity.class);
+            PendingIntent pendingIntent = PendingIntent.getActivity(
+                    this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT
+            );
+            builder.setContentIntent(pendingIntent);
+            mBeaconManager.enableForegroundServiceScanning(builder.build(), 456);
+        } else {
+            mBeaconManager.disableForegroundServiceScanning();
+        }
+        enableBackgroundScan(PreferencesUtil.isBackgroundScan(this));
+
+    }
+
+    private void initBeaconManager() {
+        mBeaconManager.setBackgroundMode(PreferencesUtil.isBackgroundScan(this));
+
+        if (PreferencesUtil.isEddystoneLayoutUID(this)) {
+            mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout(BeaconParser.EDDYSTONE_UID_LAYOUT));
+        }
+        if (PreferencesUtil.isEddystoneLayoutURL(this)) {
+            mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout(BeaconParser.EDDYSTONE_URL_LAYOUT));
+        }
+        if (PreferencesUtil.isEddystoneLayoutTLM(this)) {
+            mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout(BeaconParser.EDDYSTONE_TLM_LAYOUT));
+        }
+        mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout(BeaconParser.ALTBEACON_LAYOUT));
+
+        mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout("m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24,d:25-25"));
+        mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout("m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24"));
+        mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout("m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24"));
+
+        mBeaconManager.setBackgroundBetweenScanPeriod(PreferencesUtil.getBackgroundScanInterval(this));
+
+
+        if (PreferencesUtil.isForegroundScan(this)) {
+
+            mBeaconManager.setEnableScheduledScanJobs(false);
+            mBeaconManager.setBackgroundBetweenScanPeriod(0L);
+            mBeaconManager.setBackgroundScanPeriod(1100L);
+
+        } else {
+            mBeaconManager.setEnableScheduledScanJobs(true);
+            mBeaconManager.setBackgroundScanPeriod(10000L);          // default is 10000L
+            mBeaconManager.setForegroundBetweenScanPeriod(0L);      // default is 0L
+            mBeaconManager.setForegroundScanPeriod(1100L);          // Default is 1100L
+
+            //mBeaconManager.setMaxTrackingAge(10000);
+            //mBeaconManager.setRegionExitPeriod(18000L);
+        }
+
+        /*
+        RangedBeacon.setMaxTrackingAge() only controls the period of time ranged beacons will continue to be
+        returned after the scanning service stops detecting them.
+        It has no affect on when monitored regions trigger exits. It is set to 5 seconds by default.
+
+        Monitored regions are exited whenever a scan period finishes and the BeaconManager.setRegionExitPeriod()
+        has passed since the last detection.
+        By default, this is 10 seconds, but you can customize it.
+
+        Using the defaults, the library will stop sending ranging updates five seconds after a beacon was last seen,
+         and then send a region exit 10 seconds after it was last seen.
+        You are welcome to change these two settings to meet your needs, but the BeaconManager.setRegionExitPeriod()
+        should generally be the same or longer than the RangedBeacon.setMaxTrackingAge().
+         */
+
+        BackgroundPowerSaver mBackgroundPowerSaver = new BackgroundPowerSaver(this);
+        mBeaconManager.addRangeNotifier(this);
+
+        try {
+            if (mBeaconManager.isAnyConsumerBound()) {
+                mBeaconManager.updateScanPeriods();
+            }
+        } catch (RemoteException e) {
+            Log.e(Constants.TAG, "update scan periods error", e);
+        }
+    }
+
+    public void enableBackgroundScan(boolean enable) {
+        if (enable) {
+            Log.d(Constants.TAG, "Enable Background Scan");
+            enableRegions();
+            //loadTrackedBeacons();
+        } else {
+            Log.d(Constants.TAG, "Disable Background Scan");
+            disableRegions();
+        }
+    }
+
+    private void disableRegions() {
+        if (mRegionBootstrap != null) {
+            mRegionBootstrap.disable();
+        }
+    }
+
+    /**
+     * consider to use as a cache of beacons
+     */
+    private void loadTrackedBeacons() {
+        mBeacons = mDataManager.getAllBeacons();
+    }
+
+    private void enableRegions() {
+        mRegions = getAllEnabledRegions();
+        if (mRegions.size() > 0) {
+            mRegionBootstrap = new RegionBootstrap(this, mRegions);
+        } else {
+            Log.d(Constants.TAG, "Ignore Background scan, no regions");
+        }
+    }
+
+    public List<Region> getAllEnabledRegions() {
+        List<Region> regions = new ArrayList<>();
+        List<ActionBeacon> actions = mDataManager.getAllEnabledBeaconActions();
+        for (ActionBeacon action : actions) {
+            regions.add(ActionRegion.parseRegion(action));
+        }
+        return regions;
+    }
+
+    @Override
+    public void didEnterRegion(Region region) {
+        RegionName regName = RegionName.parseString(region.getUniqueId());
+
+        if (regName.isApplicationRegion()) {
+
+            Log.d(Constants.TAG, "didEnterRegion " + region);
+
+            if (regName.getEventType() == ActionBeacon.EventType.EVENT_NEAR_YOU) {
+                try {
+                    mBeaconManager.startRangingBeaconsInRegion(region);
+                } catch (RemoteException e) {
+                    Log.e(Constants.TAG, "Error start ranging region: " + regName, e);
+                }
+            }
+            if (regName.getEventType() == ActionBeacon.EventType.EVENT_ENTERS_REGION) {
+                Intent intent = new Intent();
+                intent.setAction(Constants.NOTIFY_BEACON_ENTERS_REGION);
+                intent.putExtra("REGION", (Parcelable) region);
+                mBroadcaster.sendBroadcast(intent);
+            }
+        }
+    }
+
+    @Override
+    public void didExitRegion(Region region) {
+
+        RegionName regName = RegionName.parseString(region.getUniqueId());
+
+        if (regName.isApplicationRegion()) {
+            Log.d(Constants.TAG, "didExitRegion " + region);
+
+            if (regName.getEventType() == ActionBeacon.EventType.EVENT_NEAR_YOU) {
+                try {
+                    mBeaconManager.stopRangingBeaconsInRegion(region);
+                    // set "far" proximity
+                    mDataManager.updateBeaconDistance(regName.getBeaconId(), 99);
+                } catch (RemoteException e) {
+                    Log.e(Constants.TAG, "Error stop ranging region: " + regName, e);
+                }
+            }
+            if (regName.getEventType() == ActionBeacon.EventType.EVENT_LEAVES_REGION) {
+                Intent intent = new Intent();
+                intent.setAction(Constants.NOTIFY_BEACON_LEAVES_REGION);
+                intent.putExtra("REGION", (Parcelable) region);
+                mBroadcaster.sendBroadcast(intent);
+            }
+        }
+    }
+
+    @Override
+    public void didDetermineStateForRegion(int i, Region region) {
+        Log.d(Constants.TAG, "Region State  " + i + " region " + region);
+    }
+
+    @Override
+    public void didRangeBeaconsInRegion(Collection<Beacon> beacons, Region region) {
+        if (beacons != null && beacons.size() > 0 && region != null) {
+
+            RegionName regName = RegionName.parseString(region.getUniqueId());
+            if (regName.isApplicationRegion()) {
+                Log.d(Constants.TAG, "didRangeBeaconsInRegion " + beacons + "|" + region.getUniqueId());
+
+                if (regName.getEventType() == ActionBeacon.EventType.EVENT_NEAR_YOU) {
+                    for (Beacon beacon : beacons) {
+                        TrackedBeacon tracked = mDataManager.getBeacon(regName.getBeaconId());
+                        mDataManager.updateBeaconDistance(regName.getBeaconId(), beacon.getDistance());
+                        if (tracked != null && BeaconUtil.isInProximity(IManagedBeacon.ProximityType.FAR, tracked.getDistance())) {
+                            if (BeaconUtil.isInProximity(IManagedBeacon.ProximityType.NEAR, beacon.getDistance())
+                                    || BeaconUtil.isInProximity(IManagedBeacon.ProximityType.VERY_CLOSE, beacon.getDistance())) {
+
+                                Intent intent = new Intent();
+                                intent.setAction(Constants.NOTIFY_BEACON_NEAR_YOU_REGION);
+                                intent.putExtra("REGION", (Parcelable) region);
+                                mBroadcaster.sendBroadcast(intent);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        enableBackgroundScan(false);
+    }
+}
